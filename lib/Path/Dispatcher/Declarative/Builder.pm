@@ -108,8 +108,7 @@ sub under {
     my $self = shift;
     my ($matcher, $rules) = @_;
 
-    my $predicate = $self->_create_rule($matcher);
-    $predicate->prefix(1);
+    my $predicate = $self->_create_rule($matcher, prefix => 1);
 
     my $under = Path::Dispatcher::Rule::Under->new(
         predicate => $predicate,
@@ -119,7 +118,7 @@ sub under {
 
     do {
         local $UNDER_RULE = $under;
-        $rules->();
+        $rules->($UNDER_RULE);
     };
 }
 
@@ -142,17 +141,17 @@ sub redispatch_to {
 sub rule_creators {
     return {
         ARRAY => sub {
-            my ($self, $tokens, $block) = @_;
+            my ($self, $tokens, %args) = @_;
 
             Path::Dispatcher::Rule::Tokens->new(
                 tokens => $tokens,
                 delimiter => $self->token_delimiter,
                 case_sensitive => $self->case_sensitive_tokens,
-                $block ? (block => $block) : (),
+                %args,
             ),
         },
         HASH => sub {
-            my ($self, $metadata_matchers, $block) = @_;
+            my ($self, $metadata_matchers, %args) = @_;
 
             if (keys %$metadata_matchers == 1) {
                 my ($field) = keys %$metadata_matchers;
@@ -162,37 +161,37 @@ sub rule_creators {
                 return Path::Dispatcher::Rule::Metadata->new(
                     field   => $field,
                     matcher => $matcher,
-                    $block ? (block => $block) : (),
+                    %args,
                 );
             }
 
             die "Doesn't support multiple metadata rules yet";
         },
         CODE => sub {
-            my ($self, $matcher, $block) = @_;
+            my ($self, $matcher, %args) = @_;
             Path::Dispatcher::Rule::CodeRef->new(
                 matcher => $matcher,
-                $block ? (block => $block) : (),
+                %args,
             ),
         },
         Regexp => sub {
-            my ($self, $regex, $block) = @_;
+            my ($self, $regex, %args) = @_;
             Path::Dispatcher::Rule::Regex->new(
                 regex => $regex,
-                $block ? (block => $block) : (),
+                %args,
             ),
         },
         empty => sub {
-            my ($self, $undef, $block) = @_;
+            my ($self, $undef, %args) = @_;
             Path::Dispatcher::Rule::Empty->new(
-                $block ? (block => $block) : (),
+                %args,
             ),
         },
     };
 }
 
 sub _create_rule {
-    my ($self, $matcher, $block) = @_;
+    my ($self, $matcher, %args) = @_;
 
     my $rule_creator;
 
@@ -209,7 +208,7 @@ sub _create_rule {
 
     $rule_creator or die "I don't know how to create a rule for type $matcher";
 
-    return $rule_creator->($self, $matcher, $block);
+    return $rule_creator->($self, $matcher, %args);
 }
 
 sub _add_rule {
@@ -221,7 +220,25 @@ sub _add_rule {
     }
     else {
         my ($matcher, $block) = splice @_, 0, 2;
-        $rule = $self->_create_rule($matcher, $block);
+
+        # set $1, etc
+        my $old_block = $block;
+        $block = sub {
+            my $match = shift;
+
+            # clear $1, $2, $3 so they don't pollute the number vars for the block
+            "x" =~ /x/;
+
+            # populate $1, $2, etc for the duration of $code
+            # it'd be nice if we could use "local" but it seems to break tests
+            my $i = 0;
+            no strict 'refs';
+            *{ ++$i } = \$_ for @{ $match->positional_captures };
+
+            $old_block->(@_);
+        };
+
+        $rule = $self->_create_rule($matcher, block => $block);
     }
 
     # FIXME: broken since move from ::Declarative
@@ -231,20 +248,8 @@ sub _add_rule {
     my $rule_name = "$file:$line";
 
     if (!defined(wantarray)) {
-        if ($UNDER_RULE) {
-            $UNDER_RULE->add_rule($rule);
-
-            my $full_name = $UNDER_RULE->has_name
-                          ? "(" . $UNDER_RULE->name . " - rule $rule_name)"
-                          : "(anonymous Under - rule $rule_name)";
-
-            $rule->name($full_name) unless $rule->has_name;
-        }
-        else {
-            $self->dispatcher->add_rule($rule);
-            $rule->name("(" . $self->dispatcher->name . " - rule $rule_name)")
-                unless $rule->has_name;
-        }
+        my $parent = $UNDER_RULE || $self->dispatcher;
+        $parent->add_rule($rule);
     }
     else {
         $rule->name($rule_name)
