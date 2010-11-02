@@ -19,10 +19,10 @@ no_index:
     - t
 requires:
   Any::Moose: 0
-  Path::Dispatcher: 1.01
+  Path::Dispatcher: 1.02
   Sub::Exporter: 0
   perl: 5.8.1
 resources:
   license: http://dev.perl.org/licenses/
   repository: http://github.com/bestpractical/path-dispatcher-declarative
-version: 0.02
+version: 0.03
